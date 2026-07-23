@@ -1,117 +1,91 @@
 import streamlit as st
-import json
+import google.generativeai as genai
 import pandas as pd
-from google import genai
+import json
+import io
 
-st.set_page_config(
-    page_title="Extrator Pro do Google Maps",
-    page_icon="📍",
-    layout="wide"
-)
+st.set_page_config(page_title="Extrator Pro do Google Maps", page_icon="📍", layout="wide")
 
-st.title("📍 Extrator Pro de Dados do Google Maps")
-st.write("Processe listas individuais ou grandes volumes de dados e baixe direto em Excel/CSV.")
+st.title("📍 Extrator Pro de Leads - Google Maps v2.0")
+st.markdown("Cole o texto bruto copiado do Google Maps para estruturar e gerar uma planilha Excel perfeita (.xlsx).")
 
-SYSTEM_PROMPT = """
-<agent_system_prompt>
-  <role>
-    <name>Agente de Extração de Dados do Google Maps</name>
-    <objective>Extrair todos os dados comerciais e retornar EXCLUSIVAMENTE uma lista de objetos em JSON válido.</objective>
-  </role>
-  <directives>
-    <rule id="1">Retorne estritamente um Array JSON de objetos com as empresas encontradas.</rule>
-    <rule id="2">Não inclua texto explicativo fora do JSON.</rule>
-  </directives>
-  <output_schema>
-    <format>JSON Array</format>
-    <structure>
-      [
-        {
-          "nome_empresa": "String | null",
-          "categoria": "String | null",
-          "telefone_fixo": "String | null",
-          "whatsapp": "String | null",
-          "email": "String | null",
-          "website": "String | null",
-          "endereco_completo": "String | null",
-          "cidade": "String | null",
-          "estado": "String | null",
-          "horario_funcionamento": "String | null",
-          "nota_avaliacao": "Number | null",
-          "total_avaliacoes": "Integer | null"
-        }
-      ]
-    </structure>
-  </output_schema>
-</agent_system_prompt>
-"""
+# Sidebar - Configurações
+with st.sidebar:
+    st.header("⚙️ Configurações")
+    api_key = st.text_input("Cole sua Gemini API Key:", type="password")
 
-# Barra Lateral
-api_key = st.sidebar.text_input("API Key do Google Gemini:", type="password")
+texto_bruto = st.text_area("Cole aqui o texto copiado do Google Maps:", height=300, placeholder="Cole todo o texto da página aqui...")
 
-st.sidebar.markdown("---")
-st.sidebar.subheader("📂 Opção de Entrada por Arquivo")
-uploaded_file = st.sidebar.file_uploader("Envie um arquivo .txt com a lista de empresas", type=["txt"])
-
-# Entrada por texto manual
-input_text = st.text_area(
-    "Ou cole aqui o texto bruto copiado do Google Maps:",
-    height=200,
-    placeholder="Cole os dados das empresas aqui..."
-)
-
-# Define o texto final
-final_text = ""
-if uploaded_file is not None:
-    final_text = uploaded_file.read().decode("utf-8")
-elif input_text.strip():
-    final_text = input_text
-
-if st.button("🚀 Extrair, Organizar e Gerar Planilha", type="primary"):
+if st.button("🚀 Extrair e Gerar Planilha", type="primary"):
     if not api_key:
-        st.error("⚠️ Insira sua API Key do Google Gemini na barra lateral.")
-    elif not final_text.strip():
-        st.warning("⚠️ Cole o texto ou faça upload de um arquivo .txt.")
+        st.error("Por favor, insira sua API Key do Gemini na barra lateral.")
+    elif not texto_bruto.strip():
+        st.warning("Por favor, cole o texto do Google Maps na caixa de texto.")
     else:
-        with st.spinner("Processando e estruturando os dados..."):
-            try:
-                client = genai.Client(api_key=api_key)
+        try:
+            with st.spinner("Processando e limpando os dados com IA..."):
+                genai.configure(api_key=api_key)
+                model = genai.GenerativeModel("gemini-2.5-flash")
                 
-                response = client.models.generate_content(
-                    model="gemini-2.5-flash",
-                    contents=f"{SYSTEM_PROMPT}\n\n[INPUT_STATE]\n{final_text}"
-                )
+                prompt = f"""
+                Você é um assistente especialista em extração de dados e engenharia de dados.
+                Analise o texto bruto fornecido abaixo, copiado diretamente do Google Maps, e extraia TODAS as empresas listadas.
+
+                Instruções rigorosas de extração:
+                1. Extraia CADA empresa encontrada no texto sem omitir nenhuma.
+                2. Para cada empresa, identifique:
+                   - nome_empresa: Nome completo exato da empresa.
+                   - categoria: Categoria ou ramo principal de atuação.
+                   - telefone_fixo: Telefone comercial/fixo se houver.
+                   - whatsapp: Número de celular/WhatsApp se houver.
+                   - email: E-mail de contato se houver (caso contrário null).
+                   - website: Endereço do site se houver (caso contrário null).
+                   - endereco_completo: Logradouro, número, bairro.
+                   - cidade: Nome da cidade.
+                   - estado: Sigla do estado (ex: SP).
+                   - avaliacao: Nota média (ex: 4.8).
+                   - num_avaliacoes: Quantidade total de avaliações.
+                   - produtos_servicos: Resumo das especialidades, produtos fabricados ou serviços mencionados.
+
+                Regra de Formato:
+                Retorne EXCLUSIVAMENTE um array JSON válido contendo os objetos de cada empresa.
+                Não inclua explicações, textos introdutórios ou tags de markdown de código.
+                Garantir acentuação correta em português (UTF-8).
+
+                TEXTO BRUTO DO GOOGLE MAPS:
+                {texto_bruto}
+                """
+
+                response = model.generate_content(prompt)
+                raw_response = response.text.strip()
                 
-                # Trata a resposta para ler como JSON
-                clean_json = response.text.replace("```json", "").replace("```", "").strip()
-                data = json.loads(clean_json)
-                
-                st.success("✅ Extração concluída!")
-                
-                # Cria DataFrame no Pandas
-                df = pd.DataFrame(data)
-                
-                st.subheader("📊 Tabela de Resultados")
+                if raw_response.startswith("```"):
+                    raw_response = raw_response.split("```")[1]
+                    if raw_response.startswith("json"):
+                        raw_response = raw_response[4:]
+                raw_response = raw_response.strip()
+
+                dados = json.loads(raw_response)
+                df = pd.DataFrame(dados)
+
+                st.success(f"✅ Sucesso! Foram extraídas **{len(df)}** empresas.")
+
+                # Exibição na tela
                 st.dataframe(df, use_container_width=True)
-                
-                # Botões de Download
-                col1, col2 = st.columns(2)
-                
-                csv = df.to_csv(index=False).encode('utf-8')
-                col1.download_button(
-                    label="📥 Baixar em CSV (Excel)",
-                    data=csv,
-                    file_name='empresas_google_maps.csv',
-                    mime='text/csv',
+
+                # Criação do arquivo Excel (.xlsx real em memória)
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    df.to_excel(writer, index=False, sheet_name='Leads Google Maps')
+                excel_data = output.getvalue()
+
+                # Botão de Download em Excel Nativo (.xlsx)
+                st.download_button(
+                    label="📥 Baixar Planilha Excel (.xlsx)",
+                    data=excel_data,
+                    file_name="leads_google_maps.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
-                
-                col2.download_button(
-                    label="📋 Baixar em JSON",
-                    data=clean_json,
-                    file_name='empresas_google_maps.json',
-                    mime='application/json',
-                )
-                
-            except Exception as e:
-                st.error(f"❌ Erro ao processar os dados: {e}")
-                st.info("Dica: Certifique-se de que o retorno veio formatado como JSON válido.")
+
+        except Exception as e:
+            st.error(f"Ocorreu um erro ao processar os dados: {e}")
